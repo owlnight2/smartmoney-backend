@@ -1,0 +1,22 @@
+{
+  "name": "parley-smartmoney-backend",
+  "version": "1.0.0",
+  "description": "Backend para seguimiento Smart Money en vivo desde casas de apuestas reales (The Odds API)",
+  "main": "src/server.js",
+  "type": "module",
+  "scripts": {
+    "start": "node src/server.js",
+    "dev": "node --watch src/server.js",
+    "test": "node src/test.js",
+    "seed": "node src/seed.js"
+  },
+  "dependencies": {
+    "express": "^4.19.2",
+    "cors": "^2.8.5",
+    "node-fetch": "^3.3.2",
+    "dotenv": "^16.4.5"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
