@@ -20,10 +20,11 @@
 import express from 'express';
 import cors from 'cors';
 import { config, validateConfig } from './config.js';
-import { listSports, getOdds, clearCache, cacheStats, quota } from './oddsApiClient.js';
+import { listSports, getOdds, clearCache, cacheStats, quota, listActiveProviders } from './oddsApiClient.js';
 import { LEAGUE_TO_SPORT_KEY, SUPPORTED_SPORTS, labelFor, sportKeyFor } from './leagues.js';
 import { generateDemoEvents } from './demoData.js';
 import { analyzeEvents } from './smartMoneyAnalyzer.js';
+import { analyzeParlay, findBestParlay } from './parlayOptimizer.js';
 import { saveSnapshot, getPreviousSnapshot, diffSnapshots, purgeOld } from './historicalStore.js';
 
 const app = express();
@@ -219,6 +220,79 @@ app.get('/api/historical/:sportKey', (req, res) => {
   const prev = getPreviousSnapshot(req.params.sportKey);
   if (!prev) return res.status(404).json({ error: 'Sin snapshot histórico disponible' });
   res.json(prev);
+});
+
+// ============================================================
+// Endpoints de parlay optimizer (2026-11-17)
+// ============================================================
+
+// POST /api/parlay/analyze
+// Body: { picks: [{ eventId, homeTeam, awayTeam, market, selection, publicOdds, sharpPct, confidence, verdict, commenceTime, sportKey }] }
+// Devuelve análisis del parlay: cuota total, EV, Kelly, correlación, recomendación
+app.post('/api/parlay/analyze', (req, res) => {
+  try {
+    const { picks } = req.body || {};
+    if (!Array.isArray(picks) || picks.length < 2) {
+      return res.status(400).json({ error: 'Se requieren al menos 2 picks en el parlay' });
+    }
+    const analysis = analyzeParlay(picks);
+    res.json({ analysis });
+  } catch (err) {
+    console.error('[/api/parlay/analyze]', err.message);
+    res.status(500).json({ error: 'No se pudo analizar el parlay', detail: err.message });
+  }
+});
+
+// GET /api/parlay/optimize?league=LaLiga&maxLegs=4&minConfidence=60&minEv=1
+// Busca el mejor parlay posible entre todos los picks actuales de una liga (o todas si no se especifica)
+app.get('/api/parlay/optimize', async (req, res) => {
+  try {
+    const { league, maxLegs = 4, minConfidence = 60, minEv = 1 } = req.query;
+    const opts = {
+      maxLegs: parseInt(maxLegs, 10),
+      minConfidence: parseInt(minConfidence, 10),
+      minEv: parseFloat(minEv),
+    };
+
+    let allRows = [];
+    if (league) {
+      const sportKey = sportKeyFor(league);
+      if (!sportKey) {
+        return res.status(404).json({ error: `Liga no soportada: ${league}` });
+      }
+      const events = await fetchOddsForSport(sportKey);
+      allRows = analyzeEvents(events);
+    } else {
+      // Agregar todas las ligas
+      for (const sportKey of SUPPORTED_SPORTS) {
+        try {
+          const events = await fetchOddsForSport(sportKey);
+          allRows.push(...analyzeEvents(events));
+        } catch (err) {
+          console.warn(`[parlay/optimize] ${sportKey}: ${err.message}`);
+        }
+      }
+    }
+
+    const result = findBestParlay(allRows, opts);
+    res.json({
+      league: league || 'ALL',
+      ...result,
+      timestamp: new Date().toISOString(),
+    });
+  } catch (err) {
+    console.error('[/api/parlay/optimize]', err.message);
+    res.status(500).json({ error: 'No se pudo optimizar parlay', detail: err.message });
+  }
+});
+
+// GET /api/providers → estado de todos los providers activos
+app.get('/api/providers', (_req, res) => {
+  res.json({
+    active: listActiveProviders ? listActiveProviders() : [],
+    preference: config.providerPreference,
+    therundownConfigured: !!config.therundownApiKey,
+  });
 });
 
 app.post('/api/cache/clear', (_req, res) => {

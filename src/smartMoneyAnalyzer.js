@@ -116,12 +116,51 @@ export function analyzeEvent(event) {
       // STEAM: los sharps concentran dinero (sharp% alto y varias casas)
       const steam = sharpPct > 60 && effectiveSharpKeys.length >= 2;
 
+      // === MEJORAS DE ACIERTO (2026-11-17) ===
+      // 1. EV (Expected Value): cuánto vale cada euro apostado en esta selección,
+      //    comparado con la cuota pública. EV > 5% = value real.
+      //    p_sharp es la prob "verdadera" (referencia sharp).
+      //    cuota pública = publicOdds[i]. EV = p_sharp * (cuota - 1) - (1 - p_sharp).
+      const publicOdds = publicMkt.outcomes[i].price;
+      const ev = publicOdds > 1 ? (pSharp * (publicOdds - 1) - (1 - pSharp)) : 0;
+      const evPct = +(ev * 100).toFixed(2);
+
+      // 2. Kelly Criterion: fracción óptima del bankroll a apostar.
+      //    f* = (b*p - q) / b, donde b = cuota-1, p = p_sharp, q = 1-p.
+      //    Recomendamos fracción Kelly (Quarter Kelly = 0.25) para reducir varianza.
+      const b = publicOdds > 1 ? publicOdds - 1 : 0;
+      const q = 1 - pSharp;
+      const kellyFull = b > 0 ? (b * pSharp - q) / b : 0;
+      const kellyQuarter = Math.max(0, kellyFull * 0.25); // nunca negativo (no apostar)
+      const kellyPct = +(kellyQuarter * 100).toFixed(2);
+
+      // 3. CLV (Closing Line Value) proxy: si la cuota sharp está por debajo
+      //    de la pública en >3%, hay value estructural (estás "batiendo la línea").
+      //    Requiere histórico real para CLV verdadero; este es un proxy basado
+      //    en diferencia sharp vs público.
+      const oddsDiffPct = publicOdds > 1 && sharpMkt.outcomes[i].price > 1
+        ? ((publicOdds - sharpMkt.outcomes[i].price) / sharpMkt.outcomes[i].price) * 100
+        : 0;
+      const clvProxy = +oddsDiffPct.toFixed(2);
+
+      // 4. Confidence Score (0-100): combina edge, sharp sources, EV, y banderas.
+      //    Métrica unificada que prioriza picks con múltiples señales a favor.
+      let confidence = 50; // base neutra
+      confidence += Math.min(20, edge * 100); // +hasta 20 por edge
+      confidence += Math.min(15, evPct * 1.5); // +hasta 15 por EV
+      confidence += rlm ? 8 : 0; // +8 si hay RLM
+      confidence += steam ? 10 : 0; // +10 si hay STEAM
+      confidence += Math.min(7, (effectiveSharpKeys.length - 1) * 3.5); // más books sharp = +confianza
+      confidence += sharpPct > 60 ? 5 : 0; // sharpPct alto suma
+      confidence = Math.max(0, Math.min(100, Math.round(confidence)));
+
       let verdict, verdictClass;
-      if (edge > 0.02 && (steam || rlm)) {
+      // Umbrales ajustados con confianza y EV (no solo edge)
+      if (confidence >= 75 && (steam || rlm) && evPct >= 3) {
         verdict = 'BUY'; verdictClass = 'green';
-      } else if (edge > 0.01 && sharpPct > 55) {
+      } else if (confidence >= 60 && evPct >= 1) {
         verdict = 'WATCH'; verdictClass = 'amber';
-      } else if (edge < -0.05 || sharpPct < 25) {
+      } else if (confidence < 35 || edge < -0.05) {
         verdict = 'AVOID'; verdictClass = 'red';
       } else {
         verdict = 'HOLD'; verdictClass = 'muted';
@@ -132,10 +171,15 @@ export function analyzeEvent(event) {
         selection: sel.name,
         point: sel.point,
         sharpOdds: sharpMkt.outcomes[i].price,
-        publicOdds: publicMkt.outcomes[i].price,
+        publicOdds: publicOdds,
         sharpPct,
         ticketPct,
         edgePct: +(edge * 100).toFixed(1),
+        // Nuevas métricas de acierto
+        evPct,
+        kellyPct,
+        clvProxy,
+        confidence,
         rlm,
         steam,
         verdict,

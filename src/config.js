@@ -18,6 +18,23 @@ export const config = {
   oddsApiFormat: process.env.ODDS_API_ODDS_FORMAT || 'decimal',
   bookmakers: (process.env.BOOKMAKERS || '').split(',').map(s => s.trim()).filter(Boolean),
 
+  // TheRundown (opcional). Si hay key, los deportes US se sirven desde aquí.
+  // Free tier: 200K datapoints/mes, 3 books (DraftKings/FanDuel/BetMGM).
+  // Plan Starter ($69/mes): 25 books, incluye Pinnacle/Circa/BookMaker.
+  // Obtener key: https://therundown.io (registro email, sin KYC)
+  therundownApiKey: process.env.THERUNDOWN_API_KEY || '',
+  // IDs de books a consultar (default free tier)
+  // Free: 19=DraftKings, 22=FanDuel, 23=BetMGM
+  // Starter+: añadir 6=Pinnacle, 7=Circa, 9=BookMaker, 1=William Hill, 3=Bet365
+  therundownBookIds: (process.env.THERUNDOWN_BOOK_IDS || '19,22,23')
+    .split(',').map(s => parseInt(s.trim(), 10)).filter(n => !isNaN(n)),
+
+  // Provider preference: 'auto' (default) | 'the-odds-api' | 'therundown'
+  //   auto        → routing por deporte (US sports → TheRundown, resto → The Odds API)
+  //   the-odds-api→ todo vía The Odds API (ignora THERUNDOWN_API_KEY)
+  //   therundown  → todo vía TheRundown donde sea posible
+  providerPreference: process.env.PROVIDER_PREFERENCE || 'auto',
+
   // Cache
   cacheTtl: parseInt(process.env.CACHE_TTL || '60', 10),
 

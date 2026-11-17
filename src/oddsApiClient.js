@@ -1,130 +1,157 @@
 // ============================================================
-// oddsApiClient.js — Cliente de The Odds API v4
+// oddsApiClient.js — Router unificado de proveedores de cuotas
 // ============================================================
-// Endpoints usados:
-//   GET /sports                                  → lista de deportes soportados
-//   GET /sports/{sport_key}/odds                 → cuotas en vivo de una liga
-//   GET /sports/{sport_key}/scores               → resultados (para histórico)
+// Patrón adaptador: despacha cada petición al provider adecuado.
+// Por defecto, todo va a The Odds API. Si THERUNDOWN_API_KEY está
+// configurada, los deportes US (NFL/NBA/MLB/NHL/NCAAF/NCAAB) se
+// sirven desde TheRundown (200K datapoints/mes gratis).
 //
-// Maneja:
-//   - Autenticación por query param (apiKey)
-//   - Rate limiting (cabeceras X-Requests-*)
-//   - Cache de respuestas por endpoint
-//   - Reintentos con backoff exponencial en 429
-//   - Cuota restante en config._quota (mutada)
+// Si en el futuro se añaden más providers (OddsJam, Sportradar),
+// basta con crear su archivo en providers/ y añadirlo al routing.
+//
+// API pública (compatible hacia atrás con server.js):
+//   - listSports()
+//   - getOdds(sportKey, params)
+//   - getScores(sportKey, params)         (solo The Odds API)
+//   - clearCache()
+//   - cacheStats()
+//   - quota                                (objeto mutable con cuota agregada)
+//   - providers                            (mapa de providers activos)
 
 import { config } from './config.js';
 import { TtlCache } from './cache.js';
+import { TheOddsApiProvider } from './providers/theOddsApi.js';
+import { TheRundownProvider, THERUNDOWN_SPORT_MAPPING } from './providers/theRundown.js';
 
-const cache = new TtlCache(config.cacheTtl);
+// --- Instancia de The Odds API (siempre activo) ---
+const theOddsApi = new TheOddsApiProvider({
+  apiKey: config.oddsApiKey,
+  region: config.oddsApiRegion,
+  markets: config.oddsApiMarkets,
+  oddsFormat: config.oddsApiFormat,
+  bookmakers: config.bookmakers,
+  cacheTtl: config.cacheTtl,
+});
 
-// Estado mutable de cuota
-export const quota = {
-  used: 0,
-  remaining: 500,    // se actualiza con cabeceras reales
-  lastUpdated: null,
+// --- Instancia de TheRundown (opcional, si hay API key) ---
+const theRundown = config.therundownApiKey
+  ? new TheRundownProvider({
+      apiKey: config.therundownApiKey,
+      bookIds: config.therundownBookIds,
+      cacheTtl: config.cacheTtl,
+    })
+  : null;
+
+// --- Mapa de providers activos ---
+export const providers = {
+  'the-odds-api': theOddsApi,
+  ...(theRundown ? { 'therundown': theRundown } : {}),
 };
 
-function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
+// --- Routing: qué provider atiende cada sport_key ---
+// Por defecto TheRundown si está disponible para deportes US.
+const ROUTING = {};
+if (theRundown) {
+  for (const sportKey of Object.keys(THERUNDOWN_SPORT_MAPPING)) {
+    ROUTING[sportKey] = 'therundown';
+  }
+}
+// Si PROVIDER_PREFERENCE=the-odds-api en .env, todo va a The Odds API
+if (config.providerPreference === 'the-odds-api') {
+  for (const k of Object.keys(ROUTING)) delete ROUTING[k];
+}
 
-async function fetchJson(url, retry = 0) {
-  try {
-    const res = await fetch(url, { timeout: 10000 });
-    // Actualizar cuota desde cabeceras
-    if (res.headers.get('x-requests-used')) {
-      quota.used = parseInt(res.headers.get('x-requests-used'), 10);
-    }
-    if (res.headers.get('x-requests-remaining')) {
-      quota.remaining = parseInt(res.headers.get('x-requests-remaining'), 10);
-    }
-    quota.lastUpdated = new Date().toISOString();
+function providerFor(sportKey) {
+  const name = ROUTING[sportKey];
+  if (name && providers[name]) return providers[name];
+  return theOddsApi; // default
+}
 
-    if (res.status === 429 && retry < 3) {
-      // Rate limited: backoff exponencial
-      const wait = Math.pow(2, retry) * 1000;
-      console.warn(`[oddsApi] 429 rate limited. Esperando ${wait}ms...`);
-      await sleep(wait);
-      return fetchJson(url, retry + 1);
-    }
-    if (res.status === 401) {
-      throw new Error('ODDS_API_KEY inválida o expirada (401)');
-    }
-    if (res.status === 403) {
-      throw new Error('Sin acceso al endpoint. Verifica tu plan de The Odds API (403)');
-    }
-    if (res.status === 422) {
-      const body = await res.json().catch(() => ({}));
-      throw new Error(`Parámetros inválidos: ${body.message || 'unknown'}`);
-    }
-    if (!res.ok) {
-      throw new Error(`HTTP ${res.status} desde The Odds API`);
-    }
-    return await res.json();
-  } catch (err) {
-    if (err.name === 'FetchError' && retry < 2) {
-      await sleep(500 * (retry + 1));
-      return fetchJson(url, retry + 1);
-    }
-    throw err;
+// --- Objeto quota agregado (compatible hacia atrás con server.js) ---
+// Expone la cuota del provider principal (The Odds API).
+export const quota = {
+  used: 0,
+  remaining: 500,
+  lastUpdated: null,
+  providers: {},
+};
+
+function refreshQuota() {
+  const theOddsApiQuota = theOddsApi.getQuota();
+  quota.used = theOddsApiQuota.used;
+  quota.remaining = theOddsApiQuota.remaining;
+  quota.lastUpdated = theOddsApiQuota.lastUpdated;
+  quota.providers = {};
+  for (const [name, p] of Object.entries(providers)) {
+    quota.providers[name] = p.getQuota();
   }
 }
 
-function buildUrl(path, params = {}) {
-  const url = new URL(`${config.ODDS_API_BASE}${path}`);
-  url.searchParams.set('apiKey', config.oddsApiKey);
-  url.searchParams.set('regions', config.oddsApiRegion);
-  if (config.oddsApiMarkets.length) {
-    url.searchParams.set('markets', config.oddsApiMarkets.join(','));
-  }
-  url.searchParams.set('oddsFormat', config.oddsApiFormat);
-  if (config.bookmakers.length) {
-    url.searchParams.set('bookmakers', config.bookmakers.join(','));
-  }
-  for (const [k, v] of Object.entries(params)) {
-    if (v != null && v !== '') url.searchParams.set(k, v);
-  }
-  return url.toString();
-}
+// --- API pública ---
 
-// GET /sports
 export async function listSports() {
-  const cacheKey = 'sports';
-  const cached = cache.get(cacheKey);
-  if (cached) return cached;
-  const url = buildUrl('/sports');
-  const data = await fetchJson(url);
-  cache.set(cacheKey, data, 24 * 3600 * 1000); // 24h cache (lista casi nunca cambia)
-  return data;
+  // Unión de deportes de todos los providers activos
+  const all = [];
+  if (theRundown && config.providerPreference !== 'the-odds-api') {
+    all.push(...await theRundown.listSports());
+  }
+  if (!config.demoMode) {
+    try {
+      const sports = await theOddsApi.listSports();
+      all.push(...sports);
+    } catch (err) {
+      console.warn('[oddsApiClient] The Odds API listSports falló:', err.message);
+    }
+  }
+  // Dedupe por key
+  const seen = new Set();
+  const unique = all.filter(s => {
+    if (seen.has(s.key)) return false;
+    seen.add(s.key);
+    return true;
+  });
+  refreshQuota();
+  return unique;
 }
 
-// GET /sports/{sport_key}/odds
-// params: { dateFormat: 'iso', commenceTimeFrom, commenceTimeTo }
 export async function getOdds(sportKey, params = {}) {
-  const cacheKey = `odds:${sportKey}:${JSON.stringify(params)}`;
-  const cached = cache.get(cacheKey);
-  if (cached) return cached;
-  const url = buildUrl(`/sports/${sportKey}/odds`, {
-    dateFormat: 'iso',
-    ...params,
-  });
-  const data = await fetchJson(url);
-  cache.set(cacheKey, data);
+  const provider = providerFor(sportKey);
+  const data = await provider.getOdds(sportKey, params);
+  refreshQuota();
   return data;
 }
 
-// GET /sports/{sport_key}/scores
 export async function getScores(sportKey, params = {}) {
-  const cacheKey = `scores:${sportKey}:${JSON.stringify(params)}`;
-  const cached = cache.get(cacheKey);
-  if (cached) return cached;
-  const url = buildUrl(`/sports/${sportKey}/scores`, {
-    dateFormat: 'iso',
-    ...params,
-  });
-  const data = await fetchJson(url);
-  cache.set(cacheKey, data, 5 * 60 * 1000); // 5 min cache para scores
+  // Scores solo lo expone The Odds API
+  if (providerFor(sportKey) !== theOddsApi) {
+    throw new Error(`Scores no disponible para ${sportKey} vía TheRundown`);
+  }
+  const data = await theOddsApi.getScores(sportKey, params);
+  refreshQuota();
   return data;
 }
 
-export function clearCache() { cache.clear(); }
-export function cacheStats() { return { entries: cache.size(), ttlMs: cache.ttl }; }
+export function clearCache() {
+  for (const p of Object.values(providers)) p.clearCache();
+}
+
+export function cacheStats() {
+  const stats = {};
+  for (const [name, p] of Object.entries(providers)) {
+    stats[name] = p.cacheStats();
+  }
+  return stats;
+}
+
+// Devuelve info de routing (para /api/leagues o depuración)
+export function getProviderForSport(sportKey) {
+  const p = providerFor(sportKey);
+  return p.getProviderName();
+}
+
+export function listActiveProviders() {
+  return Object.entries(providers).map(([name, p]) => ({
+    name,
+    quota: p.getQuota(),
+  }));
+}

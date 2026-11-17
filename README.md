@@ -1,7 +1,5 @@
 # Smart Money Backend
 
-> **Despliegue en red**: consulta [DEPLOY.md](./DEPLOY.md) para instrucciones de puesta en producción (LAN, VPS con HTTPS, Docker, Render, Cloudflare Tunnel, etc.).
-
 Backend Node.js + Express que sirve **cuotas reales en vivo** desde casas de apuestas (Pinnacle, Bet365, DraftKings, William Hill, …) vía **The Odds API**, y las agrega en indicadores Smart Money (% sharp, % ticket, edge, RLM, STEAM, veredicto) consumibles por los frontends `Parley_Tata_Iraka_2026-27.html` y `Parley_Linemate_2026-27.html`.
 
 ## 🎯 Qué hace
