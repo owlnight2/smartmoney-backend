@@ -19,14 +19,15 @@ export const config = {
   bookmakers: (process.env.BOOKMAKERS || '').split(',').map(s => s.trim()).filter(Boolean),
 
   // TheRundown (opcional). Si hay key, los deportes US se sirven desde aquí.
-  // Free tier: 200K datapoints/mes, 3 books (DraftKings/FanDuel/BetMGM).
-  // Plan Starter ($69/mes): 25 books, incluye Pinnacle/Circa/BookMaker.
+  // Free tier: 200K datapoints/mes, 3 books en free (Pinnacle/DraftKings/FanDuel).
+  // Plan Starter ($69/mes): 25 books, incluye Circa/Caesars/BetMGM/etc.
   // Obtener key: https://therundown.io (registro email, sin KYC)
   therundownApiKey: process.env.THERUNDOWN_API_KEY || '',
-  // IDs de books a consultar (default free tier)
-  // Free: 19=DraftKings, 22=FanDuel, 23=BetMGM
-  // Starter+: añadir 6=Pinnacle, 7=Circa, 9=BookMaker, 1=William Hill, 3=Bet365
-  therundownBookIds: (process.env.THERUNDOWN_BOOK_IDS || '19,22,23')
+  // Affiliate IDs a consultar (verificados vía GET /affiliates).
+  // Free tier recomendado: 3=Pinnacle(sharp ref) + 19=DraftKings + 23=FanDuel
+  //   (Pinnacle es referencia "smart money"; DK/FD dan volumen público US)
+  // Starter+: añadir 22=BetMGM, 32=Circa, 35=Caesars, 30=Novig
+  therundownBookIds: (process.env.THERUNDOWN_BOOK_IDS || '3,19,23')
     .split(',').map(s => parseInt(s.trim(), 10)).filter(n => !isNaN(n)),
 
   // Provider preference: 'auto' (default) | 'the-odds-api' | 'therundown'
