@@ -1,0 +1,71 @@
+# ============================================================
+# render.yaml — Render Blueprint para el backend Smart Money
+# ============================================================
+# Cómo usarlo:
+#   1. Sube este archivo a la raíz de tu repo en GitHub.
+#   2. Entra en https://dashboard.render.com → "New" → "Blueprint".
+#   3. Selecciona tu repo. Render detectará este archivo y creará
+#      el servicio automáticamente con la configuración correcta.
+#
+# Alternativa manual: crea un "Web Service" apuntando a este repo,
+# build command "npm install" y start command "npm start" en la
+# carpeta backend/. Las variables de entorno se configuran en el panel.
+# ============================================================
+
+services:
+  - type: web
+    name: parley-smartmoney-backend
+    runtime: node
+    # Carpeta donde está el código del backend (relativa a la raíz del repo)
+    # rootDir: backend  # (desactivado: archivos ya estan en raiz del repo smartmoney-backend)
+    plan: free
+    # Auto-deploy cuando hagas git push a la rama principal
+    autoDeploy: true
+    branch: main
+
+    # Comando de build: instala dependencias
+    buildCommand: npm install
+    # Comando de arranque: arranca el servidor Express
+    startCommand: npm start
+
+    # Health check: Render marcará el servicio como "live" cuando este
+    # endpoint devuelva 200. Si falla, Render reiniciará el servicio.
+    healthCheckPath: /health
+
+    # Variables de entorno
+    # --------------------------------------------------------
+    # IMPORTANTE: ODDS_API_KEY es SECRETA — NO la pongas aquí en
+    # texto plano. En Render web, ve a Environment y añádela como
+    # valor encriptado. Aquí dejamos DEMO_MODE=true para que el
+    # primer deploy funcione sin API key; cuando tengas tu key,
+    # cambia DEMO_MODE=false y añade ODDS_API_KEY en el panel.
+    envVars:
+      - key: NODE_VERSION
+        value: 18.20.4
+      - key: PORT
+        value: 8787
+      - key: DEMO_MODE
+        value: "true"
+      - key: ODDS_API_REGION
+        value: eu
+      - key: ODDS_API_MARKETS
+        value: h2h,spreads,totals
+      - key: ODDS_API_ODDS_FORMAT
+        value: decimal
+      - key: BOOKMAKERS
+        value: ""
+      - key: CACHE_TTL
+        value: "60"
+      - key: SNAPSHOT_INTERVAL
+        value: "600"
+      - key: HISTORICAL_DIR
+        value: ./data/historical
+      # CORS: pon aquí tus dominios Netlify separados por comas.
+      # Ejemplo: https://parley.netlify.app,https://tu-otro-dominio.netlify.app
+      # "*" permite cualquier origen (útil para pruebas; restringir en prod).
+      - key: CORS_ORIGINS
+        value: "*"
+      # ODDS_API_KEY — AÑADIR MANUALMENTE EN EL PANEL (valor secreto)
+      # Cuando la añadas, cambia DEMO_MODE a "false" arriba.
+      - key: ODDS_API_KEY
+        sync: false   # Render pedirá el valor al hacer deploy (no se hardcodea)
